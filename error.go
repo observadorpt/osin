@@ -13,6 +13,7 @@ const (
 	E_UNSUPPORTED_GRANT_TYPE           = "unsupported_grant_type"
 	E_INVALID_GRANT                    = "invalid_grant"
 	E_INVALID_CLIENT                   = "invalid_client"
+	E_INVALID_TOKEN                    = "invalid_token"
 )
 
 var (

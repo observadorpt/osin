@@ -23,9 +23,11 @@ const (
 type AccessRequest struct {
 	Type          AccessRequestType
 	Code          string
+	Nonce         string
 	Client        Client
 	AuthorizeData *AuthorizeData
 	AccessData    *AccessData
+	ARType        AuthorizeRequestTypes
 
 	// Force finish to use this access data, to allow access data reuse
 	ForceAccessData *AccessData
@@ -163,7 +165,6 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 		Expiration:      s.Config.AccessExpiration,
 		HttpRequest:     r,
 	}
-
 	// "code" is required
 	if ret.Code == "" {
 		w.SetError(E_INVALID_GRANT, "")
@@ -195,6 +196,7 @@ func (s *Server) handleAuthorizationCodeRequest(w *Response, r *http.Request) *A
 		w.SetError(E_UNAUTHORIZED_CLIENT, "")
 		return nil
 	}
+
 	if ret.AuthorizeData.IsExpiredAt(s.Now()) {
 		w.SetError(E_INVALID_GRANT, "")
 		return nil
@@ -478,6 +480,20 @@ func (s *Server) FinishAccessRequest(w *Response, r *http.Request, ar *AccessReq
 				w.Storage.RemoveRefresh(ret.AccessData.RefreshToken)
 			}
 			w.Storage.RemoveAccess(ret.AccessData.AccessToken)
+		}
+
+		scopes := strings.Fields(ar.Scope)
+		for _, scope := range scopes {
+			if scope == "openid" {
+				IDToken, err := s.generateIDToken(ar.UserData, ar.Client, ar.Scope, ar.Nonce, ret.AccessToken)
+				if err != nil {
+					w.SetError(E_SERVER_ERROR, "")
+					w.InternalError = err
+					return
+				}
+				w.Output["id_token"] = IDToken
+				break
+			}
 		}
 
 		// output data

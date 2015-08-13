@@ -8,9 +8,11 @@ import (
 type Server struct {
 	Config            *ServerConfig
 	Storage           Storage
+	UserStorage       UserStorage
 	AuthorizeTokenGen AuthorizeTokenGen
 	AccessTokenGen    AccessTokenGen
 	Now               func() time.Time
+	ClaimManager      ClaimManager
 }
 
 // NewServer creates a new server instance
