@@ -3,31 +3,36 @@ package osin
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
 // AuthorizeRequestType is the type for OAuth param `response_type`
 type AuthorizeRequestType string
+type AuthorizeRequestTypes []string
 
 const (
-	CODE  AuthorizeRequestType = "code"
-	TOKEN                      = "token"
+	CODE     AuthorizeRequestType = "code"
+	TOKEN                         = "token"
+	ID_TOKEN                      = "id_token"
 )
 
 // Authorize request information
 type AuthorizeRequest struct {
-	Type        AuthorizeRequestType
+	Type        AuthorizeRequestTypes
 	Client      Client
 	Scope       string
 	RedirectUri string
 	State       string
+	Nonce       string
 
 	// Set if request is authorized
 	Authorized bool
 
 	// Token expiration in seconds. Change if different from default.
-	// If type = TOKEN, this expiration will be for the ACCESS token.
-	Expiration int32
+	TokenExpiration   int32
+	IdTokenExpiration int32
+	CodeExpiration    int32
 
 	// Data to be passed to storage. Not used by the library.
 	UserData interface{}
@@ -61,6 +66,15 @@ type AuthorizeData struct {
 
 	// Data to be passed to storage. Not used by the library.
 	UserData interface{}
+}
+
+func (rt AuthorizeRequestTypes) HasType(t AuthorizeRequestType) bool {
+	for _, k := range rt {
+		if AuthorizeRequestType(k) == t {
+			return true
+		}
+	}
+	return false
 }
 
 // IsExpired is true if authorization expired
@@ -99,12 +113,13 @@ func (s *Server) HandleAuthorizeRequest(w *Response, r *http.Request) *Authorize
 	ret := &AuthorizeRequest{
 		State:       r.Form.Get("state"),
 		Scope:       r.Form.Get("scope"),
+		Nonce:       r.Form.Get("nonce"),
 		RedirectUri: unescapedUri,
 		Authorized:  false,
 		HttpRequest: r,
 	}
 
-	// must have a valid client
+	// must have a valid Client
 	ret.Client, err = w.Storage.GetClient(r.Form.Get("client_id"))
 	if err != nil {
 		w.SetErrorState(E_SERVER_ERROR, "", ret.State)
@@ -134,15 +149,18 @@ func (s *Server) HandleAuthorizeRequest(w *Response, r *http.Request) *Authorize
 
 	w.SetRedirect(ret.RedirectUri)
 
-	requestType := AuthorizeRequestType(r.Form.Get("response_type"))
+	// missing Types: id_token, code token, code id_token, id_token token, code id_token TOKEN
+	requestType := AuthorizeRequestTypes(strings.Fields(r.Form.Get("response_type")))
 	if s.Config.AllowedAuthorizeTypes.Exists(requestType) {
-		switch requestType {
-		case CODE:
-			ret.Type = CODE
-			ret.Expiration = s.Config.AuthorizationExpiration
-		case TOKEN:
-			ret.Type = TOKEN
-			ret.Expiration = s.Config.AccessExpiration
+		ret.Type = requestType
+		if requestType.HasType(CODE) {
+			ret.CodeExpiration = s.Config.AuthorizationExpiration
+		}
+		if requestType.HasType(TOKEN) {
+			ret.TokenExpiration = s.Config.AccessExpiration
+		}
+		if requestType.HasType(ID_TOKEN) {
+			ret.IdTokenExpiration = s.Config.IDTokenExpiration
 		}
 		return ret
 	}
@@ -161,7 +179,7 @@ func (s *Server) FinishAuthorizeRequest(w *Response, r *http.Request, ar *Author
 	w.SetRedirect(ar.RedirectUri)
 
 	if ar.Authorized {
-		if ar.Type == TOKEN {
+		if ar.Type.HasType(TOKEN) {
 			w.SetRedirectFragment(true)
 
 			// generate token directly
@@ -171,22 +189,25 @@ func (s *Server) FinishAuthorizeRequest(w *Response, r *http.Request, ar *Author
 				Client:          ar.Client,
 				RedirectUri:     ar.RedirectUri,
 				Scope:           ar.Scope,
+				Nonce:           ar.Nonce,
 				GenerateRefresh: false, // per the RFC, should NOT generate a refresh token in this case
 				Authorized:      true,
-				Expiration:      ar.Expiration,
+				Expiration:      ar.TokenExpiration,
 				UserData:        ar.UserData,
+				ARType:          ar.Type,
 			}
 
 			s.FinishAccessRequest(w, r, ret)
 			if ar.State != "" && w.InternalError == nil {
 				w.Output["state"] = ar.State
 			}
-		} else {
+		}
+		if ar.Type.HasType(CODE) {
 			// generate authorization token
 			ret := &AuthorizeData{
 				Client:      ar.Client,
 				CreatedAt:   s.Now(),
-				ExpiresIn:   ar.Expiration,
+				ExpiresIn:   ar.CodeExpiration,
 				RedirectUri: ar.RedirectUri,
 				State:       ar.State,
 				Scope:       ar.Scope,
@@ -212,6 +233,16 @@ func (s *Server) FinishAuthorizeRequest(w *Response, r *http.Request, ar *Author
 			// redirect with code
 			w.Output["code"] = ret.Code
 			w.Output["state"] = ret.State
+
+			if ar.Type.HasType(ID_TOKEN) {
+				IDToken, err := s.generateIDToken(ar.UserData, ar.Client, ar.Scope, ar.Nonce, "")
+				if err != nil {
+					w.SetError(E_SERVER_ERROR, "")
+					w.InternalError = err
+					return
+				}
+				w.Output["id_token"] = IDToken
+			}
 		}
 	} else {
 		// redirect with error
