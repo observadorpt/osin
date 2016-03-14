@@ -3,10 +3,11 @@ package osin
 import (
 	"crypto/sha256"
 	"encoding/base64"
-	jwt "github.com/dgrijalva/jwt-go"
 	"io"
 	"strings"
 	"time"
+
+	jwt "github.com/dgrijalva/jwt-go"
 )
 
 // http://openid.net/specs/openid-connect-core-1_0.html#IDToken
@@ -32,6 +33,8 @@ func (s *Server) generateIDToken(userData interface{}, client Client, scopesStri
 			token.Claims[k] = v
 		}
 	}
+	// kid
+	token.Header["kid"] = s.Config.JWTKeyID
 	key, _ := jwt.ParseRSAPrivateKeyFromPEM(s.Config.JWTKey)
 	a, err := token.SignedString(key)
 	return a, err

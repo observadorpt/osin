@@ -76,6 +76,9 @@ type ServerConfig struct {
 
 	// JSON Web Token key
 	JWTKey []byte
+
+	// JSON Web Token key ID
+	JWTKeyID string
 }
 
 // NewServerConfig returns a new ServerConfig with default configuration
